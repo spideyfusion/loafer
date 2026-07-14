@@ -112,7 +112,7 @@ func (c *Config) Validate() error {
 }
 
 // AnnotationIPs returns the name of the IPs annotation.
-func (c *Config) AnnotationIPs() string { return c.AnnotationPrefix + "/ips" }
+func (c Config) AnnotationIPs() string { return c.AnnotationPrefix + "/ips" }
 
 // AnnotationHostname returns the name of the hostname annotation.
-func (c *Config) AnnotationHostname() string { return c.AnnotationPrefix + "/hostname" }
+func (c Config) AnnotationHostname() string { return c.AnnotationPrefix + "/hostname" }

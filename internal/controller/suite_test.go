@@ -13,9 +13,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -26,7 +28,10 @@ import (
 	"github.com/spideyfusion/loafer/internal/config"
 )
 
-var k8sClient client.Client
+var (
+	k8sClient  client.Client
+	restConfig *rest.Config
+)
 
 const testClass = "loafer.dev/static"
 
@@ -43,6 +48,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "starting envtest:", err)
 		os.Exit(1)
 	}
+	restConfig = restCfg
 
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Metrics: metricsserver.Options{BindAddress: "0"},
@@ -53,9 +59,8 @@ func TestMain(m *testing.M) {
 	}
 	reconciler := &ServiceReconciler{
 		Client:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorderFor("loafer"), //nolint:staticcheck // matches main.go
-
-		Config: config.Default(),
+		Recorder: mgr.GetEventRecorder("loafer"),
+		Store:    config.NewStaticStore(config.Default()),
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		fmt.Fprintln(os.Stderr, "setting up reconciler:", err)
@@ -168,20 +173,20 @@ func updateService(t *testing.T, name string, mutate func(*corev1.Service)) {
 	}
 }
 
-// eventuallyEvent polls until an Event with the given reason exists for the
-// Service and returns it.
-func eventuallyEvent(t *testing.T, svcName, reason string) *corev1.Event {
+// eventuallyEvent polls until an events.k8s.io/v1 Event with the given
+// reason exists for the Service and returns it.
+func eventuallyEvent(t *testing.T, svcName, reason string) *eventsv1.Event {
 	t.Helper()
-	var found *corev1.Event
+	var found *eventsv1.Event
 	err := wait.PollUntilContextTimeout(t.Context(), 100*time.Millisecond, 10*time.Second, true,
 		func(ctx context.Context) (bool, error) {
-			var events corev1.EventList
+			var events eventsv1.EventList
 			if err := k8sClient.List(ctx, &events, client.InNamespace("default")); err != nil {
 				return false, err
 			}
 			for i := range events.Items {
 				e := &events.Items[i]
-				if e.InvolvedObject.Name == svcName && e.Reason == reason {
+				if e.Regarding.Name == svcName && e.Reason == reason {
 					found = e
 					return true, nil
 				}
@@ -307,8 +312,10 @@ func TestIdempotentReReconcile(t *testing.T) {
 	})
 	consistentlyIngress(t, "idempotent", []corev1.LoadBalancerIngress{{IP: "203.0.113.80"}})
 
+	// With the events.k8s.io API a repeated identical event would show up
+	// as a series on the original Event.
 	ev := eventuallyEvent(t, "idempotent", "IPAssigned")
-	if ev.Count > 1 {
-		t.Errorf("IPAssigned emitted %d times, want 1", ev.Count)
+	if ev.Series != nil && ev.Series.Count > 1 {
+		t.Errorf("IPAssigned emitted %d times, want 1", ev.Series.Count)
 	}
 }

@@ -97,9 +97,14 @@ Behavior details:
 
 ## Configuration
 
-The controller reads a single YAML file at startup (`--config`, default
-`/etc/loafer/config.yaml`). There is no hot-reload: restart the pod to
-apply changes. All fields are optional; an empty file is valid:
+The controller reads a single YAML file (`--config`, default
+`/etc/loafer/config.yaml`) and **hot-reloads** it: the file is re-checked
+every 10 seconds, a valid change applies immediately (followed by a full
+resync), and a broken change is logged and ignored while the previous
+configuration stays active. A few fields are fixed at startup — bind
+addresses, leader election, and *widening* the namespace watch scope — and
+log a "requires a restart" notice when changed. All fields are optional; an
+empty file is valid:
 
 ```yaml
 loadBalancerClass: loafer.dev/static   # class this controller claims
@@ -126,6 +131,25 @@ installed configuration.
 Standard controller-runtime metrics on `metricsBindAddress`, plus:
 
 - `loafer_ip_assignments_total{result="assigned|released|invalid"}`
+
+### Admission warnings (optional)
+
+On Kubernetes ≥ 1.31 you can additionally get typo feedback right at
+`kubectl apply` time, as a warning (never a rejection):
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/spideyfusion/loafer/main/deploy/admission-warnings.yaml
+```
+
+```
+$ kubectl annotate svc demo loafer.dev/ips=not-an-ip
+Warning: loafer.dev/ips contains an entry that is not a valid IP address; ...
+service/demo annotated
+```
+
+This is a CEL `ValidatingAdmissionPolicy` with `validationActions: [Warn]` —
+no webhook, no TLS, no controller involvement. If you changed
+`annotationPrefix`, edit the annotation name in the policy to match.
 
 ## What this is not
 

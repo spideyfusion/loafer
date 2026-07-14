@@ -7,6 +7,27 @@ releases; this file tracks the highlights.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-14
+
+### Added
+
+- **Config hot-reload**: the config file is polled every 10 seconds; valid
+  changes apply immediately (including `logLevel`) and trigger a full
+  resync, invalid changes are logged and ignored. Bind addresses, leader
+  election, and widening the namespace watch scope still require a restart
+  and log a notice when changed.
+- **Admission warnings** (optional, Kubernetes ≥ 1.31):
+  `deploy/admission-warnings.yaml` installs a CEL ValidatingAdmissionPolicy
+  that warns — never rejects — at apply time when `loafer.dev/ips` is not a
+  valid IP list.
+
+### Changed
+
+- Events are now written through the `events.k8s.io/v1` API. **RBAC
+  change**: the controller needs `events` create/patch/update in the
+  `events.k8s.io` group instead of the core group; `kubectl apply -k
+  deploy/` updates the shipped ClusterRole.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

@@ -11,11 +11,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/spideyfusion/loafer/internal/config"
 	"github.com/spideyfusion/loafer/internal/ipparse"
@@ -38,20 +41,22 @@ func init() {
 }
 
 // ServiceReconciler publishes annotated IPs into the status of eligible
-// LoadBalancer Services.
+// LoadBalancer Services. Configuration is read through Store on every
+// reconcile, so hot-reloaded changes apply immediately.
 type ServiceReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
-	Config   config.Config
+	Recorder events.EventRecorder
+	Store    *config.Store
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services/status,verbs=patch;update
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 
 // Reconcile drives one Service to its desired status.
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	cfg := r.Store.Get()
 
 	var svc corev1.Service
 	if err := r.Get(ctx, req.NamespacedName, &svc); err != nil {
@@ -63,7 +68,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	if !r.eligible(&svc) {
+	if !eligible(cfg, &svc) {
 		// A Service we used to own may have changed type or moved to
 		// another loadBalancerClass. Clear our leftover entries once;
 		// after that we no longer own ingress and never touch it again.
@@ -73,7 +78,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	raw := strings.TrimSpace(svc.Annotations[r.Config.AnnotationIPs()])
+	raw := strings.TrimSpace(svc.Annotations[cfg.AnnotationIPs()])
 	if raw == "" {
 		// Annotation removed or emptied: release what we published.
 		if len(svc.Status.LoadBalancer.Ingress) == 0 {
@@ -82,18 +87,18 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, r.patchStatus(ctx, &svc, nil)
 	}
 
-	ips, err := ipparse.Parse(raw, r.Config.ParsedCIDRs)
+	ips, err := ipparse.Parse(raw, cfg.ParsedCIDRs)
 	if err != nil {
 		// Invalid input is terminal until the object changes: emit the
 		// event, leave existing status alone, and do not requeue.
-		log.Error(err, "invalid annotation", "annotation", r.Config.AnnotationIPs())
-		r.Recorder.Eventf(&svc, corev1.EventTypeWarning, "InvalidAnnotation",
-			"ignoring %s: %v", r.Config.AnnotationIPs(), err)
+		log.Error(err, "invalid annotation", "annotation", cfg.AnnotationIPs())
+		r.Recorder.Eventf(&svc, nil, corev1.EventTypeWarning, "InvalidAnnotation", "ProcessAnnotation",
+			"ignoring %s: %v", cfg.AnnotationIPs(), err)
 		ipAssignments.WithLabelValues("invalid").Inc()
 		return ctrl.Result{}, nil
 	}
 
-	desired := desiredIngress(ips, strings.TrimSpace(svc.Annotations[r.Config.AnnotationHostname()]))
+	desired := desiredIngress(ips, strings.TrimSpace(svc.Annotations[cfg.AnnotationHostname()]))
 	if ingressEqual(svc.Status.LoadBalancer.Ingress, desired) {
 		return ctrl.Result{}, nil
 	}
@@ -103,17 +108,17 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 // eligible applies the rules from the spec: LoadBalancer type, matching
 // class (or nil class when claimServicesWithoutClass), namespace selector.
-func (r *ServiceReconciler) eligible(svc *corev1.Service) bool {
-	if len(r.Config.Namespaces) > 0 && !slices.Contains(r.Config.Namespaces, svc.Namespace) {
+func eligible(cfg config.Config, svc *corev1.Service) bool {
+	if len(cfg.Namespaces) > 0 && !slices.Contains(cfg.Namespaces, svc.Namespace) {
 		return false
 	}
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
 		return false
 	}
 	if svc.Spec.LoadBalancerClass == nil {
-		return r.Config.ClaimServicesWithoutClass
+		return cfg.ClaimServicesWithoutClass
 	}
-	return *svc.Spec.LoadBalancerClass == r.Config.LoadBalancerClass
+	return *svc.Spec.LoadBalancerClass == cfg.LoadBalancerClass
 }
 
 // patchStatus server-side applies .status.loadBalancer with the desired
@@ -138,10 +143,12 @@ func (r *ServiceReconciler) patchStatus(ctx context.Context, svc *corev1.Service
 		return fmt.Errorf("applying status: %w", err)
 	}
 	if len(desired) == 0 {
-		r.Recorder.Event(svc, corev1.EventTypeNormal, "IPReleased", "cleared load balancer ingress")
+		r.Recorder.Eventf(svc, nil, corev1.EventTypeNormal, "IPReleased", "ReleaseIP",
+			"cleared load balancer ingress")
 		ipAssignments.WithLabelValues("released").Inc()
 	} else {
-		r.Recorder.Eventf(svc, corev1.EventTypeNormal, "IPAssigned", "published load balancer ingress %s", ingressSummary(desired))
+		r.Recorder.Eventf(svc, nil, corev1.EventTypeNormal, "IPAssigned", "AssignIP",
+			"published load balancer ingress %s", ingressSummary(desired))
 		ipAssignments.WithLabelValues("assigned").Inc()
 	}
 	return nil
@@ -179,11 +186,15 @@ func (r *ServiceReconciler) logDuplicateIPs(ctx context.Context, svc *corev1.Ser
 	}
 }
 
-// SetupWithManager wires the reconciler and the duplicate-IP index.
+// SetupWithManager wires the reconciler, the duplicate-IP index, and a full
+// resync on configuration reload.
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Service{}, ipIndexKey,
 		func(obj client.Object) []string {
-			raw := strings.TrimSpace(obj.GetAnnotations()[r.Config.AnnotationIPs()])
+			// Index entries are computed when the object changes, so an
+			// annotationPrefix reload only affects the (best-effort)
+			// duplicate detection for objects written after the change.
+			raw := strings.TrimSpace(obj.GetAnnotations()[r.Store.Get().AnnotationIPs()])
 			if raw == "" {
 				return nil
 			}
@@ -200,8 +211,24 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err != nil {
 		return err
 	}
+
+	// On config reload, re-reconcile every Service: eligibility and desired
+	// status may have changed without any object event.
+	resync := make(chan event.GenericEvent)
+	r.Store.OnChange(func(_, _ config.Config) {
+		var svcs corev1.ServiceList
+		if err := r.List(context.Background(), &svcs); err != nil {
+			logf.Log.WithName("config").Error(err, "listing services for post-reload resync")
+			return
+		}
+		for i := range svcs.Items {
+			resync <- event.GenericEvent{Object: &svcs.Items[i]}
+		}
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Service{}).
+		WatchesRawSource(source.Channel(resync, &handler.EnqueueRequestForObject{})).
 		Named("loafer").
 		Complete(r)
 }

@@ -42,6 +42,22 @@ if [[ "${got:-}" != "$want" ]]; then
 fi
 log "IP assigned: $got"
 
+log "checking the IPAssigned event (events.k8s.io RBAC)"
+found=""
+for _ in $(seq 1 15); do
+  if kubectl get events.events.k8s.io \
+      --field-selector reason=IPAssigned,regarding.name=demo -o name | grep -q .; then
+    found=yes
+    break
+  fi
+  sleep 2
+done
+if [[ -z "$found" ]]; then
+  echo "FAIL: no IPAssigned event; check the events.k8s.io RBAC" >&2
+  kubectl -n loafer-system logs deploy/loafer --tail=50 >&2 || true
+  exit 1
+fi
+
 log "removing the annotation"
 kubectl annotate svc demo loafer.dev/ips-
 
@@ -56,5 +72,23 @@ if [[ -n "${got:-}" ]]; then
   kubectl -n loafer-system logs deploy/loafer --tail=50 >&2 || true
   exit 1
 fi
+
+log "checking admission warnings (ValidatingAdmissionPolicy)"
+kubectl apply -f deploy/admission-warnings.yaml
+# Policy/binding propagation is asynchronous; retry until the warning shows.
+warned=""
+for _ in $(seq 1 15); do
+  stderr=$(kubectl annotate --overwrite svc demo loafer.dev/ips=not-an-ip 2>&1 >/dev/null || true)
+  if grep -q "not a valid IP" <<<"$stderr"; then
+    warned=yes
+    break
+  fi
+  sleep 2
+done
+if [[ -z "$warned" ]]; then
+  echo "FAIL: expected an admission warning for an invalid annotation" >&2
+  exit 1
+fi
+kubectl annotate svc demo loafer.dev/ips- >/dev/null
 
 log "e2e OK"

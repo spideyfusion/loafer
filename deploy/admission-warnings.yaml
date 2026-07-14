@@ -1,0 +1,44 @@
+# Optional: warn at admission time when a loafer.dev/ips annotation is not a
+# valid IP list. Warning only — nothing is ever rejected; the controller
+# still emits its InvalidAnnotation event, this just surfaces typos directly
+# in the kubectl output at apply time.
+#
+# Requires Kubernetes >= 1.31 (CEL isIP). Not part of the kustomize base:
+#   kubectl apply -f deploy/admission-warnings.yaml
+#
+# The annotation name is hard-coded here; if you changed annotationPrefix in
+# the controller config, adjust the expressions to match.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: loafer-annotation-warnings
+spec:
+  failurePolicy: Ignore
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  matchConditions:
+    - name: has-loafer-ips-annotation
+      expression: >-
+        object.spec.type == 'LoadBalancer'
+        && has(object.metadata.annotations)
+        && 'loafer.dev/ips' in object.metadata.annotations
+  validations:
+    - expression: >-
+        object.metadata.annotations['loafer.dev/ips'].trim() == ''
+        || object.metadata.annotations['loafer.dev/ips'].split(',').all(e, isIP(e.trim()))
+      message: >-
+        loafer.dev/ips contains an entry that is not a valid IP address;
+        loafer will ignore the whole annotation and leave the Service status
+        untouched
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: loafer-annotation-warnings
+spec:
+  policyName: loafer-annotation-warnings
+  validationActions: [Warn]

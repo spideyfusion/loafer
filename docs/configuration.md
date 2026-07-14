@@ -1,9 +1,26 @@
 # Configuration reference
 
-loafer reads a single YAML file at startup, from the path given by
-`--config` (default `/etc/loafer/config.yaml`). There is no hot-reload —
-restart the pod to apply changes. Unknown fields and invalid values are
-startup errors.
+loafer reads a single YAML file from the path given by `--config` (default
+`/etc/loafer/config.yaml`). Unknown fields and invalid values are startup
+errors.
+
+## Hot-reload
+
+The file is polled every 10 seconds (polling, not inotify, so ConfigMap
+symlink swaps are always picked up):
+
+- A **valid** change applies immediately and triggers a resync of all
+  watched Services, so eligibility changes take effect without object edits.
+- An **invalid** change (unknown field, bad CIDR, bad log level) is logged
+  once and ignored; the previous configuration stays active. Fix the file
+  and it is picked up on the next poll.
+- `logLevel` changes apply live.
+
+Fields fixed at manager startup log a "requires a restart" notice when
+changed: `metricsBindAddress`, `healthProbeBindAddress`, `leaderElection`,
+and any change that *widens* the namespace watch scope (adding a namespace
+to a non-empty `namespaces` list, or emptying the list). Narrowing the
+namespace selector works live.
 
 All fields are optional. The zero-value (empty) file is valid and equals:
 
@@ -27,7 +44,7 @@ logLevel: info
 | `claimServicesWithoutClass` | `false` | Also claim Services with **no** `loadBalancerClass`. Only enable this if nothing else (cloud controller, MetalLB) could claim them — two implementations writing the same status will fight. |
 | `annotationPrefix` | `loafer.dev` | Prefix for the `<prefix>/ips` and `<prefix>/hostname` annotations. Lets forks rename without code changes. Must not contain `/`. |
 | `allowedCIDRs` | `[]` | When non-empty, every annotated IP must fall within at least one CIDR, otherwise the annotation is rejected (`Warning/InvalidAnnotation`). |
-| `namespaces` | `[]` | When non-empty, only Services in these namespaces are reconciled (and watched). |
+| `namespaces` | `[]` | When non-empty, only Services in these namespaces are reconciled (and watched). Widening this list requires a restart (see hot-reload above). |
 | `leaderElection.enabled` | `true` | Leader election for running multiple replicas. |
 | `leaderElection.namespace` | pod namespace | Namespace holding the election Lease. |
 | `metricsBindAddress` | `:8080` | Prometheus metrics endpoint. `0` disables. |

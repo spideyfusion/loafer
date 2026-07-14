@@ -50,7 +50,10 @@ Non-goals (also documented in the README's "What this is not"):
 - **No IPAM** — the user chooses the IP; want allocation? Use MetalLB.
 - **No data plane** — no routes, ARP, BGP, firewalls.
 - **No CRDs** — config file + annotations only.
-- **No webhooks/admission logic** in v1.
+- **No webhooks.** Since v0.2.0 an *optional* CEL
+  `ValidatingAdmissionPolicy` (`deploy/admission-warnings.yaml`, K8s ≥ 1.31)
+  surfaces invalid-annotation warnings at apply time — warning only, never a
+  rejection, and no webhook/TLS machinery.
 - **No multi-cluster awareness.**
 
 ## 3. Behavioral contract (as implemented)
@@ -126,14 +129,23 @@ Rules (pure logic in `internal/ipparse.Parse`, ~100% covered):
   comparing it would cause a patch loop.
 - Two services declaring the same IP → allowed (user's call). Detected
   cheaply via a cache field index (`ipIndexKey`) and logged at `info`.
-- Events use the classic core/v1 recorder (`GetEventRecorderFor`, nolint'd
-  deprecation) to keep RBAC on core `events` only; revisit when
-  controller-runtime removes it.
+- Events use the `events.k8s.io/v1` API (`mgr.GetEventRecorder`, since
+  v0.2.0) with action strings `AssignIP` / `ReleaseIP` /
+  `ProcessAnnotation`. RBAC needs the `events.k8s.io` group, not core
+  events. In tests, list `eventsv1.EventList` and read `.Regarding` /
+  `.Series` (not `.InvolvedObject` / `.Count`).
 
 ### 3.5 Config file
 
-Read once at startup from `--config` (default `/etc/loafer/config.yaml`).
-**No hot-reload** — pod restart applies changes. Full reference in
+Read from `--config` (default `/etc/loafer/config.yaml`) and
+**hot-reloaded** since v0.2.0: `internal/config.Store` polls the file every
+10s (polling, not inotify — ConfigMap symlink swaps), swaps atomically on a
+valid change, and triggers a full Service resync through a
+`source.Channel` in `SetupWithManager`. An invalid change is logged once
+and ignored (previous config stays active); `logLevel` switches live via a
+zap `AtomicLevel`. Bind addresses, leader election, and *widening* the
+namespace watch scope are fixed at manager startup — `warnNonReloadable` in
+`main.go` logs a restart notice for those. Full reference in
 `docs/configuration.md`. Defaults:
 
 ```yaml
@@ -162,16 +174,18 @@ logLevel: info
   `r.Status().Apply(ctx, corev1ac.Service(...).WithStatus(...), client.FieldOwner(FieldManager))`.
 
 ```
-cmd/loafer/main.go            flags, config load, manager wiring only — no logic
-internal/config/              schema, strict loading, validation (100% covered)
+cmd/loafer/main.go            flags, config store, manager wiring only — no logic
+internal/config/              schema, strict loading, validation; Store = hot-reload
 internal/ipparse/             annotation parsing + CIDR checks, pure funcs (100% covered)
 internal/controller/
   service_controller.go       the reconciler (~200 lines incl. comments)
   ingress.go                  pure helpers: desiredIngress, ingressEqual, ownsIngress
   suite_test.go               envtest integration suite
+  reload_test.go              live config-reload envtest (second manager)
 deploy/                       kustomize base (namespace, RBAC, deployment, configMapGenerator)
+deploy/admission-warnings.yaml  optional VAP, not in the kustomize base
 examples/                     basic.yaml (annotated Service), config.yaml (local run)
-hack/e2e.sh                   kind smoke test
+hack/e2e.sh                   kind smoke test (incl. admission-warning check)
 docs/configuration.md         full config reference
 ```
 
@@ -180,8 +194,8 @@ reconciler grows past ~200 lines, factor logic out, don't add layers.
 
 RBAC (in `deploy/rbac.yaml`, mirrored by kubebuilder markers in the
 reconciler): `services` get/list/watch, `services/status` patch/update,
-`events` create/patch, `coordination.k8s.io/leases` for leader election.
-Nothing more.
+`events.k8s.io/events` create/patch/update, `coordination.k8s.io/leases`
+for leader election. Nothing more.
 
 ## 5. Testing (non-negotiable; all in place and green)
 
@@ -190,15 +204,20 @@ Nothing more.
 - **Integration** (`internal/controller/suite_test.go`, envtest, plain `go
   test` style — no ginkgo): assign, update, release, hostname, ineligible
   class never touched, type change clears, invalid annotation emits Warning
-  and preserves status, idempotent re-reconcile (event count stays 1), field
-  manager verified via managedFields. Tests skip gracefully when
+  and preserves status, idempotent re-reconcile (no event series), field
+  manager verified via managedFields. `reload_test.go` runs a second manager
+  (`SkipNameValidation` — controller names are globally unique per process)
+  against the same envtest API server and proves a config-file rewrite
+  reclassifies a Service with no object edits. Tests skip gracefully when
   `KUBEBUILDER_ASSETS` is unset; `make test` sets it via `setup-envtest`
-  (envtest k8s 1.33.0). Controller package sits at ~94.5%.
+  (envtest k8s 1.33.0). Controller package sits at ~94%.
 - **E2E** (`make e2e`): kind cluster, build+load image, `kubectl apply -k
   deploy/`, apply `examples/basic.yaml`, assert `203.0.113.10` appears in
-  status, remove annotation, assert cleared. Last run: **passing**.
+  status, remove annotation, assert cleared; then apply
+  `deploy/admission-warnings.yaml` and assert an invalid annotation produces
+  a kubectl warning.
 - **Coverage gate**: `make coverage` filters `cmd/` from the profile and
-  enforces ≥ **85%** (currently **96.2%**). CI runs the same target.
+  enforces ≥ **85%** (currently ~96%). CI runs the same target.
 
 Test names in the envtest suite create uniquely named Services in the
 `default` namespace and clean up via `t.Cleanup`; the manager is shared
@@ -207,15 +226,15 @@ across tests via `TestMain`.
 ## 6. CI & releases
 
 - `.github/workflows/ci.yaml` (PRs + main): `go vet` + `golangci-lint`
-  (v2.1.6, config in `.golangci.yml` — keep the version in sync with the
-  Makefile), `go mod tidy` diff check, `make coverage`, `make e2e`,
+  (version pinned in the Makefile and mirrored in the workflow — keep them
+  in sync), `go mod tidy` diff check, `make coverage`, `make e2e`,
   multi-arch image build without push.
 - `.github/workflows/release.yaml` (tags `v*`): goreleaser v2 publishes
   binaries (linux/darwin × amd64/arm64), multi-arch images to GHCR
   (`Dockerfile.goreleaser` copies the prebuilt binary; the root `Dockerfile`
   builds from source for dev/CI), SBOMs via syft, GitHub build-provenance
   attestation. SemVer; `--version` prints version/commit/date via ldflags.
-- Tool pins live in the Makefile (`golangci-lint v2.1.6`, `setup-envtest
+- Tool pins live in the Makefile (`golangci-lint v2.12.2`, `setup-envtest
   release-0.21` binaries `1.33.0`, `kind v0.29.0`); tools install to `./bin`.
 
 ## 7. Current repo state (handover)
@@ -255,9 +274,10 @@ across tests via `TestMain`.
 ## 9. Sensible next steps
 
 - Optionally clean up the v0.1.0 release-run race (see §7).
-- Possible v2 ideas (explicitly out of v1 scope): config hot-reload,
-  `events.k8s.io` recorder migration, admission warnings on invalid
-  annotations.
+- The former "v2 ideas" (config hot-reload, `events.k8s.io` recorder,
+  admission warnings) shipped in v0.2.0. Remaining ideas, none committed:
+  a Helm chart, per-Service `ipMode` control via annotation, richer
+  duplicate-IP reporting (metric or Event instead of a log line).
 
 Lesson from the first release: golangci-lint release binaries must be new
 enough for the module's `go` directive — a `go install`-built copy can pass

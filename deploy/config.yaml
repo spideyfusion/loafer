@@ -1,5 +1,7 @@
-# loafer configuration. All fields optional; see docs/configuration.md
-# for the full reference. Changes require a pod restart (no hot-reload).
+# loafer configuration. All fields optional; see docs/configuration.md for
+# the full reference. Changes are hot-reloaded within ~10s of the ConfigMap
+# propagating; bind addresses, leader election, and namespace-scope widening
+# still need a pod restart.
 loadBalancerClass: loafer.dev/static
 claimServicesWithoutClass: false
 allowedCIDRs: []

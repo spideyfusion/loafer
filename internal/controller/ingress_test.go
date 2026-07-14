@@ -230,8 +230,7 @@ func TestEligible(t *testing.T) {
 			if tt.cfg != nil {
 				cfg = tt.cfg(base)
 			}
-			r := &ServiceReconciler{Config: cfg}
-			if got := r.eligible(tt.svc); got != tt.want {
+			if got := eligible(cfg, tt.svc); got != tt.want {
 				t.Errorf("eligible() = %v, want %v", got, tt.want)
 			}
 		})
