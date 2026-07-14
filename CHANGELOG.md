@@ -7,6 +7,17 @@ releases; this file tracks the highlights.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-14
+
+### Fixed
+
+- v0.2.0 dropped core-group `events` from RBAC, but controller-runtime's
+  leader election still records its "became leader" event through the
+  legacy core events API, producing a `forbidden` error at startup and a
+  lost event. The leader-election Role now grants core `events`
+  create/patch again (namespaced, `loafer-system` only). Re-run
+  `kubectl apply -k deploy/` to pick it up; no restart needed.
+
 ## [0.2.0] - 2026-07-14
 
 ### Added

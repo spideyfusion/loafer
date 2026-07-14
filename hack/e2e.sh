@@ -91,4 +91,10 @@ if [[ -z "$warned" ]]; then
 fi
 kubectl annotate svc demo loafer.dev/ips- >/dev/null
 
+log "checking controller logs for RBAC errors"
+if kubectl -n loafer-system logs deploy/loafer | grep -i forbidden; then
+  echo "FAIL: controller logged an RBAC 'forbidden' error (see above)" >&2
+  exit 1
+fi
+
 log "e2e OK"

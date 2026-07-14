@@ -195,7 +195,10 @@ reconciler grows past ~200 lines, factor logic out, don't add layers.
 RBAC (in `deploy/rbac.yaml`, mirrored by kubebuilder markers in the
 reconciler): `services` get/list/watch, `services/status` patch/update,
 `events.k8s.io/events` create/patch/update, `coordination.k8s.io/leases`
-for leader election. Nothing more.
+for leader election — plus core-group `events` create/patch in the
+namespaced leader-election Role only: controller-runtime's leader election
+still records "became leader" through the legacy core events API (bit us in
+v0.2.0; the e2e now greps controller logs for `forbidden`). Nothing more.
 
 ## 5. Testing (non-negotiable; all in place and green)
 
