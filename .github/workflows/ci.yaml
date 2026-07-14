@@ -21,7 +21,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           # Keep in sync with GOLANGCI_LINT_VERSION in the Makefile.
-          version: v2.1.6
+          version: v2.12.2
 
   tidy:
     runs-on: ubuntu-latest
