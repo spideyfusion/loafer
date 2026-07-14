@@ -220,11 +220,18 @@ across tests via `TestMain`.
 
 ## 7. Current repo state (handover)
 
-- **Nothing is committed yet.** `git init` done on branch `main`; all files untracked.
-- The GitHub repo `spideyfusion/loafer` may not exist yet; nothing has been
-  pushed. The README quickstart URL (`kubectl apply -k
-  https://github.com/spideyfusion/loafer/deploy`) only works after the first
-  push.
+- **Pushed and released.** `main` lives at `git@github.com:spideyfusion/loafer.git`,
+  CI is green, and **v0.1.0** is published: GitHub release with binaries
+  (linux/darwin × amd64/arm64), SBOMs and checksums, plus multi-arch images
+  `ghcr.io/spideyfusion/loafer:0.1.0` and `:latest` (note: image tags have
+  no `v` prefix — goreleaser uses `{{ .Version }}`).
+- v0.1.0 release quirk: the tag was force-moved once before release (to drop
+  a stray file), and two release runs raced. The release *archives* embed
+  orphaned-but-content-identical commit `56cadc6` in `--version`; the GHCR
+  *images* embed the real tag commit `38e1f5f`. Functionally identical; the
+  failed duplicate run on the Actions tab is cosmetic. To make it pristine,
+  delete the v0.1.0 release with an authenticated `gh` and re-run the
+  release workflow.
 - `make help` lists all targets; everything runs from a clean clone with Go
   and Docker only (envtest binaries and tools are fetched into `./bin`,
   which is gitignored along with coverage files).
@@ -240,16 +247,19 @@ across tests via `TestMain`.
 4. Invalid IP / out-of-CIDR annotation → Warning Event, no status change —
    **verified** (envtest `TestInvalidAnnotation`; CIDR paths unit-tested).
 5. `make test` and `make e2e` pass from a clean clone; coverage gate green —
-   **verified locally**; CI has not run yet (no push).
-6. README quickstart works verbatim — **pending first push** (URL), the
-   equivalent local flow is e2e-verified.
+   **verified locally and in GitHub Actions** (all five CI jobs green).
+6. README quickstart works verbatim — **live**: repo is public and
+   `ghcr.io/spideyfusion/loafer:latest` is pullable (verified by running the
+   released image and binary).
 
-## 9. Sensible next steps (not started)
+## 9. Sensible next steps
 
-- Initial commit and push to `spideyfusion/loafer`; confirm CI is green in
-  GitHub Actions (it mirrors local `make` targets, so surprises should be
-  limited to runner environment).
-- Tag `v0.1.0` once CI is green to exercise the goreleaser pipeline.
+- Optionally clean up the v0.1.0 release-run race (see §7).
 - Possible v2 ideas (explicitly out of v1 scope): config hot-reload,
   `events.k8s.io` recorder migration, admission warnings on invalid
   annotations.
+
+Lesson from the first release: golangci-lint release binaries must be new
+enough for the module's `go` directive — a `go install`-built copy can pass
+locally while the same pinned version fails in CI (this bit v2.1.6 with Go
+1.26; now pinned to v2.12.2 in both the Makefile and `ci.yaml`).
