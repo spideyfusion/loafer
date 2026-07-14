@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/loaf.png" alt="loafer logo" width="360">
+<img src="docs/loaf.png" alt="loafer logo" width="260">
 
 # loafer
 
@@ -8,7 +8,6 @@
 
 [![CI](https://github.com/spideyfusion/loafer/actions/workflows/ci.yaml/badge.svg)](https://github.com/spideyfusion/loafer/actions/workflows/ci.yaml)
 [![Release](https://img.shields.io/github/v/release/spideyfusion/loafer)](https://github.com/spideyfusion/loafer/releases/latest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/spideyfusion/loafer)](https://goreportcard.com/report/github.com/spideyfusion/loafer)
 [![Go version](https://img.shields.io/github/go-mod/go-version/spideyfusion/loafer)](go.mod)
 [![License](https://img.shields.io/github/license/spideyfusion/loafer)](LICENSE)
 [![Container image](https://img.shields.io/badge/ghcr.io-spideyfusion%2Floafer-2496ED?logo=docker&logoColor=white)](https://github.com/spideyfusion/loafer/pkgs/container/loafer)
