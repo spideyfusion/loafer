@@ -1,20 +1,48 @@
+<div align="center">
+
+<img src="docs/loaf.png" alt="loafer logo" width="360">
+
 # loafer
 
 **A LoadBalancer that doesn't lift a finger.**
 
-A tiny Kubernetes controller that publishes a user-chosen IP address into the
-status of `LoadBalancer` Services, based on an annotation. Your external load
-balancer does all the work; loafer just tells Kubernetes about it.
+[![CI](https://github.com/spideyfusion/loafer/actions/workflows/ci.yaml/badge.svg)](https://github.com/spideyfusion/loafer/actions/workflows/ci.yaml)
+[![Release](https://img.shields.io/github/v/release/spideyfusion/loafer)](https://github.com/spideyfusion/loafer/releases/latest)
+[![Go Report Card](https://goreportcard.com/badge/github.com/spideyfusion/loafer)](https://goreportcard.com/report/github.com/spideyfusion/loafer)
+[![Go version](https://img.shields.io/github/go-mod/go-version/spideyfusion/loafer)](go.mod)
+[![License](https://img.shields.io/github/license/spideyfusion/loafer)](LICENSE)
+[![Container image](https://img.shields.io/badge/ghcr.io-spideyfusion%2Floafer-2496ED?logo=docker&logoColor=white)](https://github.com/spideyfusion/loafer/pkgs/container/loafer)
 
-Built for clusters where the actual load balancer lives *outside* the cluster
-— an on-prem appliance, a router, a manually managed VIP. No cloud controller
-ever populates the Service status there, so `kubectl get svc` shows
-`<pending>` forever and everything that consumes the status field
-(external-dns, ingress controllers, GitOps health checks) breaks. You already
-know which IP the Service is reachable on; loafer writes it where
-Kubernetes expects it.
+</div>
 
-## Quickstart (60 seconds)
+---
+
+loafer is a tiny Kubernetes controller that publishes a user-chosen IP
+address into the status of `LoadBalancer` Services, based on an annotation.
+
+It's built for clusters where the actual load balancer lives *outside* the
+cluster — an on-prem appliance, a router, a manually managed VIP. No cloud
+controller ever populates the Service status there, so `kubectl get svc`
+shows `<pending>` forever and everything that consumes the status field
+(external-dns, ingress controllers, GitOps health checks) breaks. You
+already know which IP the Service is reachable on. Your load balancer does
+all the work; **loafer just tells Kubernetes about it.**
+
+## Highlights
+
+- **One annotation** — `loafer.dev/ips: 203.0.113.10` and the IP shows up
+  under `EXTERNAL-IP`. IPv4, IPv6, or both.
+- **Plays nice** — claims only Services with its `loadBalancerClass`, writes
+  status via server-side apply, and never touches anything another
+  implementation owns. Coexists safely with MetalLB or cloud controllers.
+- **Hot-reloadable config** — a single YAML file, re-checked every 10
+  seconds; changes apply live with a full resync.
+- **Typo-proof (optional)** — a CEL admission policy warns right in your
+  `kubectl` output when an annotation isn't a valid IP list.
+- **Boring on purpose** — no CRDs, no webhooks, no IPAM, no data plane.
+  Small enough to read in one sitting.
+
+## Quickstart
 
 Install the controller:
 
@@ -59,10 +87,10 @@ rules:
 2. `spec.loadBalancerClass` equals the configured class (default
    `loafer.dev/static`). Services with no class or another class are never
    touched — this is the standard Kubernetes mechanism for coexisting with
-   other load-balancer implementations. If your cluster cannot set the field,
-   `claimServicesWithoutClass: true` also claims class-less Services, at the
-   risk of fighting a cloud controller — leave it off unless you know you
-   need it.
+   other load-balancer implementations. If your cluster cannot set the
+   field, `claimServicesWithoutClass: true` also claims class-less Services,
+   at the risk of fighting a cloud controller — leave it off unless you know
+   you need it.
 3. The namespace matches the configured selector (default: all namespaces).
 
 For eligible Services it parses the annotations:
@@ -75,25 +103,27 @@ For eligible Services it parses the annotations:
 and server-side-applies `.status.loadBalancer.ingress` with field manager
 `loafer`. Nothing else on the Service is ever written.
 
-Behavior details:
+<details>
+<summary><b>Behavior details</b></summary>
 
 - **Valid annotation** → status is set to exactly the declared IPs
   (deduplicated, order preserved), Event `Normal/IPAssigned`.
 - **Invalid annotation** (unparseable IP, or outside `allowedCIDRs`) →
   existing status is left untouched, Event `Warning/InvalidAnnotation` with
-  the reason. Invalid input is terminal until the object changes; there is no
-  hot retry loop.
+  the reason. Invalid input is terminal until the object changes; there is
+  no hot retry loop.
 - **Annotation removed or emptied** → the published entries are cleared,
   Event `Normal/IPReleased`.
 - **Service becomes ineligible** (type changed away from `LoadBalancer`, or
-  recreated under another class) → entries owned by loafer are cleared
-  once, then the Service is left alone. Ownership is checked via
-  `managedFields`, so entries written by another implementation are never
-  touched.
+  recreated under another class) → entries owned by loafer are cleared once,
+  then the Service is left alone. Ownership is checked via `managedFields`,
+  so entries written by another implementation are never touched.
 - **Two Services declaring the same IP** → allowed; that is your call. The
   controller logs it at `info`.
 - **Write conflicts** (another field manager owns the status) → surface as
   errors and retry with backoff, never silently overwrite.
+
+</details>
 
 ## Configuration
 
@@ -101,30 +131,27 @@ The controller reads a single YAML file (`--config`, default
 `/etc/loafer/config.yaml`) and **hot-reloads** it: the file is re-checked
 every 10 seconds, a valid change applies immediately (followed by a full
 resync), and a broken change is logged and ignored while the previous
-configuration stays active. A few fields are fixed at startup — bind
-addresses, leader election, and *widening* the namespace watch scope — and
-log a "requires a restart" notice when changed. All fields are optional; an
-empty file is valid:
+configuration stays active. All fields are optional; an empty file is valid:
 
 ```yaml
 loadBalancerClass: loafer.dev/static   # class this controller claims
-claimServicesWithoutClass: false          # also claim services with no class set (risky)
+claimServicesWithoutClass: false       # also claim services with no class set (risky)
 annotationPrefix: loafer.dev           # annotation prefix, for forks/renames
-allowedCIDRs: []                          # e.g. ["203.0.113.0/24", "2001:db8::/64"]
-namespaces: []                            # empty = all namespaces
+allowedCIDRs: []                       # e.g. ["203.0.113.0/24", "2001:db8::/64"]
+namespaces: []                         # empty = all namespaces
 leaderElection:
   enabled: true
-  namespace: ""                           # defaults to the pod namespace
+  namespace: ""                        # defaults to the pod namespace
 metricsBindAddress: ":8080"
 healthProbeBindAddress: ":8081"
-logLevel: info                            # debug|info|warn|error
+logLevel: info                         # debug|info|warn|error
 ```
 
-Unknown fields and invalid values (bad CIDR, bad log level) are startup
-errors, so typos fail loudly. The only flags are `--config` and `--version`.
-
-Edit `deploy/config.yaml` before `kubectl apply -k deploy/` to change the
-installed configuration.
+Unknown fields and invalid values (bad CIDR, bad log level) fail loudly.
+The only flags are `--config` and `--version`. Edit `deploy/config.yaml`
+before `kubectl apply -k deploy/` to change the installed configuration —
+see the [full configuration reference](docs/configuration.md), including
+which fields still need a restart.
 
 ### Metrics
 
@@ -151,15 +178,15 @@ This is a CEL `ValidatingAdmissionPolicy` with `validationActions: [Warn]` —
 no webhook, no TLS, no controller involvement. If you changed
 `annotationPrefix`, edit the annotation name in the policy to match.
 
-## What this is not
+## What loafer is not
 
-- **No IPAM.** loafer does not allocate IPs from pools; you choose the IP.
+- **Not IPAM.** loafer does not allocate IPs from pools; you choose the IP.
   If you want allocation (and an in-cluster data plane), use
   [MetalLB](https://metallb.universe.tf/).
-- **No data plane.** It does not program routes, ARP, BGP, or firewalls.
+- **Not a data plane.** It does not program routes, ARP, BGP, or firewalls.
   Delivering traffic to the IP is entirely your responsibility — that's the
   point: your load balancer already does it.
-- **No CRDs, no webhooks.** Configuration is a file plus annotations.
+- **Not a CRD zoo.** Configuration is a file plus annotations.
 
 ## Development
 
@@ -169,7 +196,9 @@ make test    # unit + envtest integration tests
 make e2e     # kind end-to-end smoke test (needs Docker)
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev guide.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+dev setup and PR expectations, and [SECURITY.md](SECURITY.md) for reporting
+vulnerabilities.
 
 ## License
 
