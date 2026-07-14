@@ -1,0 +1,6 @@
+# Used by goreleaser: copies the prebuilt binary instead of building from
+# source. Local/CI builds use ./Dockerfile.
+FROM gcr.io/distroless/static:nonroot
+COPY loafer /loafer
+USER 65532:65532
+ENTRYPOINT ["/loafer"]

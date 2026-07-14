@@ -1,0 +1,53 @@
+version: 2
+project_name: loafer
+
+builds:
+  - main: ./cmd/loafer
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - formats: [tar.gz]
+
+sboms:
+  - artifacts: archive
+
+dockers:
+  - image_templates:
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-amd64
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - --platform=linux/amd64
+  - image_templates:
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-arm64
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - --platform=linux/arm64
+
+docker_manifests:
+  - name_template: ghcr.io/spideyfusion/loafer:{{ .Version }}
+    image_templates:
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-amd64
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-arm64
+  - name_template: ghcr.io/spideyfusion/loafer:latest
+    image_templates:
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-amd64
+      - ghcr.io/spideyfusion/loafer:{{ .Version }}-arm64
+
+changelog:
+  use: github
+
+release:
+  footer: |
+    Container image: `ghcr.io/spideyfusion/loafer:{{ .Version }}` (linux/amd64, linux/arm64)

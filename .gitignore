@@ -1,0 +1,18 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.out
+
+# Test artifacts
+cover.out
+cover.filtered.out
+cover.html
+
+# envtest binaries
+/testbin/
+
+# Editors
+.idea/
+.vscode/
+*.swp

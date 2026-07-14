@@ -1,0 +1,5 @@
+# Config for running the controller locally against your kubeconfig:
+#   go run ./cmd/loafer --config=examples/config.yaml
+leaderElection:
+  enabled: false
+logLevel: debug

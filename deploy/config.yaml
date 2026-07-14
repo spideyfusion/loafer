@@ -1,0 +1,7 @@
+# loafer configuration. All fields optional; see docs/configuration.md
+# for the full reference. Changes require a pod restart (no hot-reload).
+loadBalancerClass: loafer.dev/static
+claimServicesWithoutClass: false
+allowedCIDRs: []
+namespaces: []
+logLevel: info
