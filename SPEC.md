@@ -243,17 +243,17 @@ across tests via `TestMain`.
 ## 7. Current repo state (handover)
 
 - **Pushed and released.** `main` lives at `git@github.com:spideyfusion/loafer.git`,
-  CI is green, and **v0.1.0** is published: GitHub release with binaries
-  (linux/darwin × amd64/arm64), SBOMs and checksums, plus multi-arch images
-  `ghcr.io/spideyfusion/loafer:0.1.0` and `:latest` (note: image tags have
-  no `v` prefix — goreleaser uses `{{ .Version }}`).
-- v0.1.0 release quirk: the tag was force-moved once before release (to drop
-  a stray file), and two release runs raced. The release *archives* embed
-  orphaned-but-content-identical commit `56cadc6` in `--version`; the GHCR
-  *images* embed the real tag commit `38e1f5f`. Functionally identical; the
-  failed duplicate run on the Actions tab is cosmetic. To make it pristine,
-  delete the v0.1.0 release with an authenticated `gh` and re-run the
-  release workflow.
+  CI is green, and **v0.2.1** is the latest release: GitHub release with
+  binaries (linux/darwin × amd64/arm64), SBOMs and checksums, plus
+  multi-arch images on GHCR (note: image tags have no `v` prefix —
+  goreleaser uses `{{ .Version }}`; `0.2.1`, not `v0.2.1`).
+- v0.1.0 release quirk: the tag was force-moved once before release, and
+  two release runs raced. The release *archives* embed an
+  orphaned-but-content-identical commit in `--version`; the GHCR *images*
+  embed the real tag commit. Functionally identical; the failed duplicate
+  run on the Actions tab is cosmetic. To make it pristine, delete the
+  v0.1.0 release with an authenticated `gh` and re-run the release
+  workflow.
 - `make help` lists all targets; everything runs from a clean clone with Go
   and Docker only (envtest binaries and tools are fetched into `./bin`,
   which is gitignored along with coverage files).
