@@ -11,6 +11,7 @@ import (
 
 	uzap "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -47,6 +48,9 @@ func main() {
 
 	logLevel := uzap.NewAtomicLevelAt(zapLevel(startCfg.LogLevel))
 	ctrl.SetLogger(zap.New(zap.Level(logLevel)))
+	// client-go (leader election in particular) logs through klog; route it
+	// into the same zap logger so all output is uniform JSON.
+	klog.SetLogger(ctrl.Log.WithName("klog"))
 	log := ctrl.Log.WithName("setup")
 
 	cacheOpts := cache.Options{}

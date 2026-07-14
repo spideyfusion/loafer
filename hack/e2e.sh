@@ -97,4 +97,10 @@ if kubectl -n loafer-system logs deploy/loafer | grep -i forbidden; then
   exit 1
 fi
 
+log "checking controller logs are uniform JSON"
+if kubectl -n loafer-system logs deploy/loafer | grep -v '^{'; then
+  echo "FAIL: non-JSON log lines (klog not routed through zap?)" >&2
+  exit 1
+fi
+
 log "e2e OK"

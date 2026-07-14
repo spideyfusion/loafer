@@ -11,6 +11,9 @@ releases; this file tracks the highlights.
 
 ### Fixed
 
+- Leader-election messages from client-go (klog) now go through the zap
+  logger, so all log output is uniform JSON.
+
 - v0.2.0 dropped core-group `events` from RBAC, but controller-runtime's
   leader election still records its "became leader" event through the
   legacy core events API, producing a `forbidden` error at startup and a
