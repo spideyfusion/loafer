@@ -7,6 +7,8 @@ releases; this file tracks the highlights.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-14
+
 ### Added
 
 - Initial implementation: publish annotated IPs (`loafer.dev/ips`) and an
