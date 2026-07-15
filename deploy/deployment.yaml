@@ -25,6 +25,11 @@ spec:
           image: ghcr.io/spideyfusion/loafer:latest
           args:
             - --config=/etc/loafer/config.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

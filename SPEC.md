@@ -90,7 +90,8 @@ A Service is reconciled iff **all** hold (implemented in
 | Annotation | Meaning |
 |---|---|
 | `loafer.dev/ips` | Comma-separated IPs to publish (IPv4 and/or IPv6). |
-| `loafer.dev/hostname` (optional) | Also publish a `hostname` ingress entry, appended after the IP entries. **Implementation decision:** only takes effect alongside a valid, non-empty `ips` annotation. |
+| `loafer.dev/ip-names` (since v0.3.0) | Comma-separated alias names resolved through the IP-aliases ConfigMap (§3.6). Mutually exclusive with `ips`: both set (non-empty) → `Warning/InvalidAnnotation`, nothing written. |
+| `loafer.dev/hostname` (optional) | Also publish a `hostname` ingress entry, appended after the IP entries. **Implementation decision:** only takes effect alongside a valid, non-empty `ips` or `ip-names` annotation. |
 
 Rules (pure logic in `internal/ipparse.Parse`, ~100% covered):
 
@@ -167,6 +168,30 @@ logLevel: info
   containing `/`) exits non-zero with a clear message.
 - Flags are only `--config` and `--version`.
 
+### 3.6 IP aliases (since v0.3.0)
+
+- A ConfigMap (default `loafer-ip-aliases` in the controller's namespace;
+  `ipAliases` in the config, startup-fixed because the cache/watch scope is
+  built from it) holds `alias: IP` entries; values use the same
+  comma-separated syntax as the `ips` annotation, so one alias can map to
+  several IPs. Resolution is pure (`ipparse.ParseNames`) and feeds the same
+  CIDR/dedup pipeline.
+- The reconciler reads the ConfigMap through the cache (`aliasData`); the
+  cache is scoped in `main.go` (`ByObject` + field selector) so only that
+  single ConfigMap is cached and watched, and the `Watches` is only added
+  when aliases are enabled.
+- A ConfigMap change enqueues exactly the alias-using Services (index
+  `ipNamesIndexKey` + `aliasConfigMapRequests`) — that's the live-reload
+  path, and also how an initially-unknown alias heals on ConfigMap
+  create/update.
+- Unknown alias / missing ConfigMap = invalid annotation: warning event,
+  existing status untouched (deliberately — deleting an alias never yanks a
+  published IP).
+- The controller namespace is resolved in `resolveAliasesRef`:
+  `ipAliases.namespace` → `POD_NAMESPACE` (downward API in the Deployment)
+  → serviceaccount mount; unresolvable → aliases disabled with a log line.
+- RBAC: namespaced Role for `configmaps` get/list/watch.
+
 ## 4. Architecture
 
 - **Go 1.26**, `sigs.k8s.io/controller-runtime` **v0.24** (one manager, one
@@ -216,9 +241,12 @@ v0.2.0; the e2e now greps controller logs for `forbidden`). Nothing more.
   (envtest k8s 1.33.0). Controller package sits at ~94%.
 - **E2E** (`make e2e`): kind cluster, build+load image, `kubectl apply -k
   deploy/`, apply `examples/basic.yaml`, assert `203.0.113.10` appears in
-  status, remove annotation, assert cleared; then apply
+  status, remove annotation, assert cleared; alias flow (create the aliases
+  ConfigMap, annotate with `ip-names`, assert the IP, edit the ConfigMap,
+  assert the new IP propagates live); then apply
   `deploy/admission-warnings.yaml` and assert an invalid annotation produces
-  a kubectl warning.
+  a kubectl warning. Also asserts an IPAssigned event exists (real RBAC), no
+  `forbidden` log lines, and all-JSON log output.
 - **Coverage gate**: `make coverage` filters `cmd/` from the profile and
   enforces ≥ **85%** (currently ~96%). CI runs the same target.
 

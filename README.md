@@ -31,6 +31,9 @@ all the work; **loafer just tells Kubernetes about it.**
 
 - **One annotation** — `loafer.dev/ips: 203.0.113.10` and the IP shows up
   under `EXTERNAL-IP`. IPv4, IPv6, or both.
+- **Named IPs** — or reference an alias (`loafer.dev/ip-names: public-lb`)
+  resolved through a ConfigMap; edit the ConfigMap once and every Service
+  using the alias re-points, live.
 - **Plays nice** — claims only Services with its `loadBalancerClass`, writes
   status via server-side apply, and never touches anything another
   implementation owns. Coexists safely with MetalLB or cloud controllers.
@@ -97,7 +100,8 @@ For eligible Services it parses the annotations:
 | Annotation | Meaning |
 |---|---|
 | `loafer.dev/ips` | Comma-separated IPs to publish, e.g. `203.0.113.10` or `203.0.113.10,2001:db8::10`. IPv4 and IPv6. |
-| `loafer.dev/hostname` (optional) | Also publish a `hostname` ingress entry. Only takes effect alongside a valid `ips` annotation. |
+| `loafer.dev/ip-names` | Comma-separated [IP alias names](#ip-aliases) resolved through a ConfigMap. Mutually exclusive with `loafer.dev/ips` — a Service setting both gets a warning and is ignored. |
+| `loafer.dev/hostname` (optional) | Also publish a `hostname` ingress entry. Only takes effect alongside a valid `ips` or `ip-names` annotation. |
 
 and server-side-applies `.status.loadBalancer.ingress` with field manager
 `loafer`. Nothing else on the Service is ever written.
@@ -124,6 +128,49 @@ and server-side-applies `.status.loadBalancer.ingress` with field manager
 
 </details>
 
+## IP aliases
+
+Hardcoding the same IP into twenty Services gets old. Put it in a ConfigMap
+in the controller's namespace instead — key is the alias, value is the IP
+(or a comma-separated list, e.g. for dual-stack):
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loafer-ip-aliases
+  namespace: loafer-system
+data:
+  public-lb: 203.0.113.10
+  dual-stack-lb: 203.0.113.20,2001:db8::20
+```
+
+and reference the *name* from Services:
+
+```yaml
+metadata:
+  annotations:
+    loafer.dev/ip-names: public-lb
+```
+
+Editing the ConfigMap re-points **every** Service that references the alias,
+live — loafer watches it and re-reconciles the users within seconds. No
+Service edits, no rollouts.
+
+Rules:
+
+- A Service uses either `loafer.dev/ips` or `loafer.dev/ip-names`, never
+  both at once (both set → `Warning/InvalidAnnotation`, nothing written).
+- An unknown alias (or a missing ConfigMap) is an invalid annotation:
+  warning event, and any already-published status is left untouched — so
+  deleting an alias out from under a Service never yanks its published IP.
+  The Service heals automatically the moment the alias appears.
+- Resolved IPs go through the same pipeline as raw ones: `allowedCIDRs`
+  enforcement, dedup, order preserved.
+- The ConfigMap name/namespace are configurable via `ipAliases` (defaults:
+  `loafer-ip-aliases` in the controller's namespace). See
+  `examples/aliases.yaml` for a complete example.
+
 ## Configuration
 
 The controller reads a single YAML file (`--config`, default
@@ -138,6 +185,9 @@ claimServicesWithoutClass: false       # also claim services with no class set (
 annotationPrefix: loafer.dev           # annotation prefix, for forks/renames
 allowedCIDRs: []                       # e.g. ["203.0.113.0/24", "2001:db8::/64"]
 namespaces: []                         # empty = all namespaces
+ipAliases:
+  configMapName: loafer-ip-aliases     # empty disables aliases
+  namespace: ""                        # defaults to the controller's namespace
 leaderElection:
   enabled: true
   namespace: ""                        # defaults to the pod namespace

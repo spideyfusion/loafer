@@ -47,6 +47,42 @@ func Parse(value string, allowed []netip.Prefix) ([]netip.Addr, error) {
 	return ips, nil
 }
 
+// ParseNames resolves a comma-separated list of IP alias names against the
+// alias table (a ConfigMap's data), returning the combined, deduplicated IP
+// list. Each alias value uses the same syntax as the IPs annotation, so an
+// alias may map to several IPs (e.g. dual-stack). One unknown name or one
+// invalid alias value invalidates the whole annotation, mirroring Parse.
+func ParseNames(value string, aliases map[string]string, allowed []netip.Prefix) ([]netip.Addr, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, fmt.Errorf("annotation value is empty")
+	}
+
+	seen := make(map[netip.Addr]bool)
+	var ips []netip.Addr
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("empty entry in alias list %q", value)
+		}
+		val, ok := aliases[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown IP alias %q", name)
+		}
+		addrs, err := Parse(val, allowed)
+		if err != nil {
+			return nil, fmt.Errorf("alias %q: %w", name, err)
+		}
+		for _, addr := range addrs {
+			if seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			ips = append(ips, addr)
+		}
+	}
+	return ips, nil
+}
+
 func withinAny(addr netip.Addr, prefixes []netip.Prefix) bool {
 	for _, p := range prefixes {
 		if p.Contains(addr) {

@@ -18,9 +18,12 @@ symlink swaps are always picked up):
 
 Fields fixed at manager startup log a "requires a restart" notice when
 changed: `metricsBindAddress`, `healthProbeBindAddress`, `leaderElection`,
-and any change that *widens* the namespace watch scope (adding a namespace
-to a non-empty `namespaces` list, or emptying the list). Narrowing the
-namespace selector works live.
+`ipAliases`, and any change that *widens* the namespace watch scope (adding
+a namespace to a non-empty `namespaces` list, or emptying the list).
+Narrowing the namespace selector works live.
+
+Note that the *content* of the IP-aliases ConfigMap is always live — it is
+watched, not polled — only its name/namespace are fixed at startup.
 
 All fields are optional. The zero-value (empty) file is valid and equals:
 
@@ -30,6 +33,9 @@ claimServicesWithoutClass: false
 annotationPrefix: loafer.dev
 allowedCIDRs: []
 namespaces: []
+ipAliases:
+  configMapName: loafer-ip-aliases
+  namespace: ""
 leaderElection:
   enabled: true
   namespace: ""
@@ -45,6 +51,8 @@ logLevel: info
 | `annotationPrefix` | `loafer.dev` | Prefix for the `<prefix>/ips` and `<prefix>/hostname` annotations. Lets forks rename without code changes. Must not contain `/`. |
 | `allowedCIDRs` | `[]` | When non-empty, every annotated IP must fall within at least one CIDR, otherwise the annotation is rejected (`Warning/InvalidAnnotation`). |
 | `namespaces` | `[]` | When non-empty, only Services in these namespaces are reconciled (and watched). Widening this list requires a restart (see hot-reload above). |
+| `ipAliases.configMapName` | `loafer-ip-aliases` | ConfigMap with `alias: IP` entries that Services reference via the `ip-names` annotation. Empty disables aliases. Requires a restart when changed. |
+| `ipAliases.namespace` | controller namespace | Namespace of that ConfigMap (resolved from `POD_NAMESPACE` or the serviceaccount mount when empty). Requires a restart when changed. |
 | `leaderElection.enabled` | `true` | Leader election for running multiple replicas. |
 | `leaderElection.namespace` | pod namespace | Namespace holding the election Lease. |
 | `metricsBindAddress` | `:8080` | Prometheus metrics endpoint. `0` disables. |

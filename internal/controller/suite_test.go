@@ -61,6 +61,10 @@ func TestMain(m *testing.M) {
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorder("loafer"),
 		Store:    config.NewStaticStore(config.Default()),
+		AliasesRef: types.NamespacedName{
+			Namespace: "default",
+			Name:      config.Default().IPAliases.ConfigMapName,
+		},
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		fmt.Fprintln(os.Stderr, "setting up reconciler:", err)

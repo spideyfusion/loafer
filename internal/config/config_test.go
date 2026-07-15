@@ -36,6 +36,9 @@ func TestParse(t *testing.T) {
 				if c.ClaimServicesWithoutClass {
 					t.Error("ClaimServicesWithoutClass should default to false")
 				}
+				if c.IPAliases.ConfigMapName != "loafer-ip-aliases" || c.IPAliases.Namespace != "" {
+					t.Errorf("IPAliases = %+v", c.IPAliases)
+				}
 			},
 		},
 		{
@@ -46,6 +49,9 @@ claimServicesWithoutClass: true
 annotationPrefix: example.com
 allowedCIDRs: ["203.0.113.0/24", "2001:db8::/64"]
 namespaces: ["prod", "staging"]
+ipAliases:
+  configMapName: my-aliases
+  namespace: infra
 leaderElection:
   enabled: false
   namespace: kube-system
@@ -60,8 +66,12 @@ logLevel: debug
 				if !c.ClaimServicesWithoutClass {
 					t.Error("ClaimServicesWithoutClass = false")
 				}
-				if c.AnnotationIPs() != "example.com/ips" || c.AnnotationHostname() != "example.com/hostname" {
-					t.Errorf("annotations = %q, %q", c.AnnotationIPs(), c.AnnotationHostname())
+				if c.AnnotationIPs() != "example.com/ips" || c.AnnotationHostname() != "example.com/hostname" ||
+					c.AnnotationIPNames() != "example.com/ip-names" {
+					t.Errorf("annotations = %q, %q, %q", c.AnnotationIPs(), c.AnnotationHostname(), c.AnnotationIPNames())
+				}
+				if c.IPAliases.ConfigMapName != "my-aliases" || c.IPAliases.Namespace != "infra" {
+					t.Errorf("IPAliases = %+v", c.IPAliases)
 				}
 				if len(c.ParsedCIDRs) != 2 {
 					t.Fatalf("ParsedCIDRs = %v", c.ParsedCIDRs)

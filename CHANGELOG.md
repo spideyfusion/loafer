@@ -7,6 +7,23 @@ releases; this file tracks the highlights.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-15
+
+### Added
+
+- **IP aliases**: a ConfigMap (default `loafer-ip-aliases` in the
+  controller's namespace, configurable via `ipAliases`) maps names to IPs,
+  and Services reference names with the new `loafer.dev/ip-names`
+  annotation. The ConfigMap is watched: editing it re-points every
+  referencing Service live. `loafer.dev/ips` and `loafer.dev/ip-names` are
+  mutually exclusive per Service. An unresolvable alias leaves existing
+  status untouched and heals automatically when the alias appears.
+- The admission-warnings policy also flags Services setting both
+  annotations.
+- RBAC: a namespaced Role for reading ConfigMaps in the controller
+  namespace; the Deployment now injects `POD_NAMESPACE` via the downward
+  API.
+
 ## [0.2.1] - 2026-07-14
 
 ### Fixed

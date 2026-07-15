@@ -8,12 +8,18 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 
+	"github.com/go-logr/logr"
 	uzap "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -60,6 +66,20 @@ func main() {
 			cacheOpts.DefaultNamespaces[ns] = cache.Config{}
 		}
 	}
+	// Cache only the one aliases ConfigMap, not every ConfigMap in the
+	// cluster. Fixed at startup; ipAliases changes need a restart.
+	aliasesRef := resolveAliasesRef(startCfg, log)
+	if aliasesRef.Name != "" {
+		cacheOpts.ByObject = map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {
+				Namespaces: map[string]cache.Config{
+					aliasesRef.Namespace: {
+						FieldSelector: fields.OneTermEqualSelector("metadata.name", aliasesRef.Name),
+					},
+				},
+			},
+		}
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Cache:                   cacheOpts,
@@ -84,9 +104,10 @@ func main() {
 	}
 
 	reconciler := &controller.ServiceReconciler{
-		Client:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorder("loafer"),
-		Store:    store,
+		Client:     mgr.GetClient(),
+		Recorder:   mgr.GetEventRecorder("loafer"),
+		Store:      store,
+		AliasesRef: aliasesRef,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up reconciler")
@@ -123,6 +144,9 @@ func warnNonReloadable(start, next config.Config) {
 	if !reflect.DeepEqual(next.LeaderElection, start.LeaderElection) {
 		log.Info("leaderElection changed; requires a restart to take effect")
 	}
+	if !reflect.DeepEqual(next.IPAliases, start.IPAliases) {
+		log.Info("ipAliases changed; requires a restart to take effect")
+	}
 	// The watch scope is fixed at startup: with a non-empty startup
 	// namespace list, services in newly added namespaces are never seen.
 	if len(start.Namespaces) > 0 {
@@ -135,6 +159,33 @@ func warnNonReloadable(start, next config.Config) {
 			log.Info("namespaces widened to all; requires a restart to take effect")
 		}
 	}
+}
+
+// resolveAliasesRef determines where the IP-aliases ConfigMap lives. The
+// namespace falls back to the pod's own namespace (downward-API env, then
+// the serviceaccount mount). If it cannot be determined, or the name is
+// configured empty, aliases are disabled.
+func resolveAliasesRef(cfg config.Config, log logr.Logger) types.NamespacedName {
+	if cfg.IPAliases.ConfigMapName == "" {
+		log.Info("IP aliases disabled (ipAliases.configMapName is empty)")
+		return types.NamespacedName{}
+	}
+	ns := cfg.IPAliases.Namespace
+	if ns == "" {
+		ns = os.Getenv("POD_NAMESPACE")
+	}
+	if ns == "" {
+		if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+			ns = strings.TrimSpace(string(b))
+		}
+	}
+	if ns == "" {
+		log.Info("IP aliases disabled: cannot determine the ConfigMap namespace; set ipAliases.namespace")
+		return types.NamespacedName{}
+	}
+	ref := types.NamespacedName{Namespace: ns, Name: cfg.IPAliases.ConfigMapName}
+	log.Info("IP aliases enabled", "configMap", ref.String())
+	return ref
 }
 
 func zapLevel(level string) zapcore.Level {

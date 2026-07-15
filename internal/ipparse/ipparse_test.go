@@ -128,25 +128,125 @@ func TestParse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Parse(tt.value, tt.allowed)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got %v", tt.wantErr, got)
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error %q does not contain %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			var gotStr []string
-			for _, a := range got {
-				gotStr = append(gotStr, a.String())
-			}
-			if !slices.Equal(gotStr, tt.want) {
-				t.Errorf("Parse(%q) = %v, want %v", tt.value, gotStr, tt.want)
-			}
+			checkResult(t, got, err, tt.want, tt.wantErr)
 		})
+	}
+}
+
+func TestParseNames(t *testing.T) {
+	aliases := map[string]string{
+		"public-lb":      "203.0.113.10",
+		"backup-lb":      "203.0.113.20",
+		"dual-stack":     "203.0.113.10,2001:db8::10",
+		"same-as-public": "203.0.113.10",
+		"broken":         "not-an-ip",
+		"outside":        "198.51.100.7",
+	}
+
+	tests := []struct {
+		name    string
+		value   string
+		allowed []netip.Prefix
+		want    []string
+		wantErr string // substring; empty means success
+	}{
+		{
+			name:  "single alias",
+			value: "public-lb",
+			want:  []string{"203.0.113.10"},
+		},
+		{
+			name:  "multiple aliases, order preserved",
+			value: "backup-lb,public-lb",
+			want:  []string{"203.0.113.20", "203.0.113.10"},
+		},
+		{
+			name:  "alias mapping to several IPs",
+			value: "dual-stack",
+			want:  []string{"203.0.113.10", "2001:db8::10"},
+		},
+		{
+			name:  "duplicate IPs across aliases are deduplicated",
+			value: "public-lb,same-as-public,dual-stack",
+			want:  []string{"203.0.113.10", "2001:db8::10"},
+		},
+		{
+			name:  "whitespace around names",
+			value: " public-lb ,\tbackup-lb ",
+			want:  []string{"203.0.113.10", "203.0.113.20"},
+		},
+		{
+			name:    "empty value",
+			value:   "  ",
+			wantErr: "empty",
+		},
+		{
+			name:    "empty entry between commas",
+			value:   "public-lb,,backup-lb",
+			wantErr: "empty entry",
+		},
+		{
+			name:    "unknown alias poisons the whole list",
+			value:   "public-lb,nope",
+			wantErr: `unknown IP alias "nope"`,
+		},
+		{
+			name:    "raw IP is not an alias",
+			value:   "203.0.113.10",
+			wantErr: "unknown IP alias",
+		},
+		{
+			name:    "alias with invalid value",
+			value:   "broken",
+			wantErr: `alias "broken"`,
+		},
+		{
+			name:    "resolved IP outside allowed CIDRs",
+			value:   "outside",
+			allowed: prefixes("203.0.113.0/24"),
+			wantErr: "not within any allowed CIDR",
+		},
+		{
+			name:    "resolved IP inside allowed CIDRs",
+			value:   "public-lb",
+			allowed: prefixes("203.0.113.0/24"),
+			want:    []string{"203.0.113.10"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseNames(tt.value, aliases, tt.allowed)
+			checkResult(t, got, err, tt.want, tt.wantErr)
+		})
+	}
+}
+
+func TestParseNamesNilAliases(t *testing.T) {
+	if _, err := ParseNames("public-lb", nil, nil); err == nil {
+		t.Fatal("expected unknown-alias error with nil alias table")
+	}
+}
+
+func checkResult(t *testing.T, got []netip.Addr, err error, want []string, wantErr string) {
+	t.Helper()
+	if wantErr != "" {
+		if err == nil {
+			t.Fatalf("expected error containing %q, got %v", wantErr, got)
+		}
+		if !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("error %q does not contain %q", err, wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotStr []string
+	for _, a := range got {
+		gotStr = append(gotStr, a.String())
+	}
+	if !slices.Equal(gotStr, want) {
+		t.Errorf("got %v, want %v", gotStr, want)
 	}
 }

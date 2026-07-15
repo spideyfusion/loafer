@@ -21,19 +21,29 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [services]
   matchConditions:
-    - name: has-loafer-ips-annotation
+    - name: has-loafer-annotation
       expression: >-
         object.spec.type == 'LoadBalancer'
         && has(object.metadata.annotations)
-        && 'loafer.dev/ips' in object.metadata.annotations
+        && ('loafer.dev/ips' in object.metadata.annotations
+            || 'loafer.dev/ip-names' in object.metadata.annotations)
   validations:
     - expression: >-
-        object.metadata.annotations['loafer.dev/ips'].trim() == ''
+        !('loafer.dev/ips' in object.metadata.annotations)
+        || object.metadata.annotations['loafer.dev/ips'].trim() == ''
         || object.metadata.annotations['loafer.dev/ips'].split(',').all(e, isIP(e.trim()))
       message: >-
         loafer.dev/ips contains an entry that is not a valid IP address;
         loafer will ignore the whole annotation and leave the Service status
         untouched
+    - expression: >-
+        !('loafer.dev/ips' in object.metadata.annotations)
+        || !('loafer.dev/ip-names' in object.metadata.annotations)
+        || object.metadata.annotations['loafer.dev/ips'].trim() == ''
+        || object.metadata.annotations['loafer.dev/ip-names'].trim() == ''
+      message: >-
+        loafer.dev/ips and loafer.dev/ip-names are both set; loafer accepts
+        only one of the two per Service and will ignore both
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -73,6 +73,31 @@ if [[ -n "${got:-}" ]]; then
   exit 1
 fi
 
+log "checking IP aliases (assign via name, live ConfigMap update)"
+kubectl -n loafer-system create configmap loafer-ip-aliases --from-literal=public-lb=203.0.113.42
+kubectl annotate svc demo loafer.dev/ip-names=public-lb
+
+wait_ip() {
+  want=$1
+  for _ in $(seq 1 30); do
+    got=$(kubectl get svc demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    [[ "$got" == "$want" ]] && return 0
+    sleep 2
+  done
+  echo "FAIL: expected EXTERNAL-IP $want, got '${got:-}'" >&2
+  kubectl -n loafer-system logs deploy/loafer --tail=50 >&2 || true
+  return 1
+}
+
+wait_ip 203.0.113.42
+log "alias resolved: 203.0.113.42"
+
+kubectl -n loafer-system create configmap loafer-ip-aliases \
+  --from-literal=public-lb=203.0.113.43 -o yaml --dry-run=client | kubectl apply -f -
+wait_ip 203.0.113.43
+log "ConfigMap edit propagated live: 203.0.113.43"
+kubectl annotate svc demo loafer.dev/ip-names-
+
 log "checking admission warnings (ValidatingAdmissionPolicy)"
 kubectl apply -f deploy/admission-warnings.yaml
 # Policy/binding propagation is asynchronous; retry until the warning shows.

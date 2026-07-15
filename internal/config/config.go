@@ -36,6 +36,12 @@ type Config struct {
 
 	LeaderElection LeaderElection `json:"leaderElection"`
 
+	// IPAliases configures the ConfigMap holding name -> IP mappings that
+	// Services can reference via the ip-names annotation. Changing these
+	// fields requires a restart (the watch scope is fixed at startup); the
+	// ConfigMap *content* is always live.
+	IPAliases IPAliases `json:"ipAliases"`
+
 	MetricsBindAddress     string `json:"metricsBindAddress"`
 	HealthProbeBindAddress string `json:"healthProbeBindAddress"`
 	// LogLevel is one of debug, info, warn, error.
@@ -53,11 +59,20 @@ type LeaderElection struct {
 	Namespace string `json:"namespace"`
 }
 
+// IPAliases locates the alias ConfigMap.
+type IPAliases struct {
+	// ConfigMapName is the name of the ConfigMap with name -> IP entries.
+	ConfigMapName string `json:"configMapName"`
+	// Namespace of that ConfigMap; defaults to the controller's namespace.
+	Namespace string `json:"namespace"`
+}
+
 // Default returns the configuration used when fields are omitted.
 func Default() Config {
 	return Config{
 		LoadBalancerClass:      "loafer.dev/static",
 		AnnotationPrefix:       "loafer.dev",
+		IPAliases:              IPAliases{ConfigMapName: "loafer-ip-aliases"},
 		LeaderElection:         LeaderElection{Enabled: true},
 		MetricsBindAddress:     ":8080",
 		HealthProbeBindAddress: ":8081",
@@ -116,3 +131,6 @@ func (c Config) AnnotationIPs() string { return c.AnnotationPrefix + "/ips" }
 
 // AnnotationHostname returns the name of the hostname annotation.
 func (c Config) AnnotationHostname() string { return c.AnnotationPrefix + "/hostname" }
+
+// AnnotationIPNames returns the name of the IP-aliases annotation.
+func (c Config) AnnotationIPNames() string { return c.AnnotationPrefix + "/ip-names" }

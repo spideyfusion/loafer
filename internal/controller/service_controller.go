@@ -10,6 +10,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/spideyfusion/loafer/internal/config"
@@ -30,6 +33,10 @@ const FieldManager = "loafer"
 // ipIndexKey indexes Services by each IP in their (valid) IPs annotation, so
 // duplicate assignments can be detected cheaply.
 const ipIndexKey = "loafer.annotated-ip"
+
+// ipNamesIndexKey indexes Services that carry the ip-names annotation, so an
+// alias ConfigMap change can re-reconcile exactly its users.
+const ipNamesIndexKey = "loafer.has-ip-names"
 
 var ipAssignments = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "loafer_ip_assignments_total",
@@ -47,15 +54,18 @@ type ServiceReconciler struct {
 	client.Client
 	Recorder events.EventRecorder
 	Store    *config.Store
+	// AliasesRef locates the IP-aliases ConfigMap. Resolved once at
+	// startup (the watch scope is fixed); an empty Name disables aliases.
+	AliasesRef types.NamespacedName
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services/status,verbs=patch;update
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch,namespace=loafer-system
 
 // Reconcile drives one Service to its desired status.
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
 	cfg := r.Store.Get()
 
 	var svc corev1.Service
@@ -78,23 +88,37 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	raw := strings.TrimSpace(svc.Annotations[cfg.AnnotationIPs()])
-	if raw == "" {
-		// Annotation removed or emptied: release what we published.
+	rawIPs := strings.TrimSpace(svc.Annotations[cfg.AnnotationIPs()])
+	rawNames := strings.TrimSpace(svc.Annotations[cfg.AnnotationIPNames()])
+	if rawIPs != "" && rawNames != "" {
+		// The two mechanisms are mutually exclusive per Service.
+		r.rejectAnnotation(ctx, &svc, fmt.Errorf("%s and %s are both set; use one or the other",
+			cfg.AnnotationIPs(), cfg.AnnotationIPNames()))
+		return ctrl.Result{}, nil
+	}
+	if rawIPs == "" && rawNames == "" {
+		// Annotations removed or emptied: release what we published.
 		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, r.patchStatus(ctx, &svc, nil)
 	}
 
-	ips, err := ipparse.Parse(raw, cfg.ParsedCIDRs)
-	if err != nil {
-		// Invalid input is terminal until the object changes: emit the
-		// event, leave existing status alone, and do not requeue.
-		log.Error(err, "invalid annotation", "annotation", cfg.AnnotationIPs())
-		r.Recorder.Eventf(&svc, nil, corev1.EventTypeWarning, "InvalidAnnotation", "ProcessAnnotation",
-			"ignoring %s: %v", cfg.AnnotationIPs(), err)
-		ipAssignments.WithLabelValues("invalid").Inc()
+	var ips []netip.Addr
+	var parseErr error
+	if rawIPs != "" {
+		ips, parseErr = ipparse.Parse(rawIPs, cfg.ParsedCIDRs)
+	} else {
+		aliases, err := r.aliasData(ctx)
+		if err != nil {
+			return ctrl.Result{}, err // transient API error: requeue
+		}
+		ips, parseErr = ipparse.ParseNames(rawNames, aliases, cfg.ParsedCIDRs)
+	}
+	if parseErr != nil {
+		// Invalid input gets no requeue: the next Service edit, config
+		// reload, or alias-ConfigMap change re-triggers reconciliation.
+		r.rejectAnnotation(ctx, &svc, parseErr)
 		return ctrl.Result{}, nil
 	}
 
@@ -104,6 +128,31 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	r.logDuplicateIPs(ctx, &svc, ips)
 	return ctrl.Result{}, r.patchStatus(ctx, &svc, desired)
+}
+
+// rejectAnnotation handles an invalid annotation: warning event, error log,
+// metric, and no change to existing status.
+func (r *ServiceReconciler) rejectAnnotation(ctx context.Context, svc *corev1.Service, err error) {
+	logf.FromContext(ctx).Error(err, "invalid annotation")
+	r.Recorder.Eventf(svc, nil, corev1.EventTypeWarning, "InvalidAnnotation", "ProcessAnnotation",
+		"ignoring annotations: %v", err)
+	ipAssignments.WithLabelValues("invalid").Inc()
+}
+
+// aliasData returns the alias ConfigMap's data. A missing ConfigMap (or
+// disabled aliases) resolves to an empty table, so every alias is unknown.
+func (r *ServiceReconciler) aliasData(ctx context.Context) (map[string]string, error) {
+	if r.AliasesRef.Name == "" {
+		return nil, nil
+	}
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, r.AliasesRef, &cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading IP aliases %s: %w", r.AliasesRef, err)
+	}
+	return cm.Data, nil
 }
 
 // eligible applies the rules from the spec: LoadBalancer type, matching
@@ -212,6 +261,17 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Service{}, ipNamesIndexKey,
+		func(obj client.Object) []string {
+			if strings.TrimSpace(obj.GetAnnotations()[r.Store.Get().AnnotationIPNames()]) == "" {
+				return nil
+			}
+			return []string{"true"}
+		})
+	if err != nil {
+		return err
+	}
+
 	// On config reload, re-reconcile every Service: eligibility and desired
 	// status may have changed without any object event.
 	resync := make(chan event.GenericEvent)
@@ -226,9 +286,35 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		WatchesRawSource(source.Channel(resync, &handler.EnqueueRequestForObject{})).
-		Named("loafer").
-		Complete(r)
+		Named("loafer")
+	// Only watch ConfigMaps when aliases are enabled — otherwise this
+	// would start an informer for ConfigMaps the cache has not scoped.
+	if r.AliasesRef.Name != "" {
+		builder = builder.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.aliasConfigMapRequests))
+	}
+	return builder.Complete(r)
+}
+
+// aliasConfigMapRequests re-reconciles every alias-using Service when the
+// aliases ConfigMap changes, so ConfigMap edits propagate live.
+func (r *ServiceReconciler) aliasConfigMapRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	if r.AliasesRef.Name == "" ||
+		obj.GetName() != r.AliasesRef.Name || obj.GetNamespace() != r.AliasesRef.Namespace {
+		return nil
+	}
+	var svcs corev1.ServiceList
+	if err := r.List(ctx, &svcs, client.MatchingFields{ipNamesIndexKey: "true"}); err != nil {
+		logf.FromContext(ctx).Error(err, "listing services for alias resync")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(svcs.Items))
+	for i := range svcs.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&svcs.Items[i]),
+		})
+	}
+	return reqs
 }
