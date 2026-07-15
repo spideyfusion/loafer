@@ -78,6 +78,13 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// Namespaces outside the configured selector are entirely hands-off:
+	// no reconciliation and no leftover cleanup. Another loafer instance
+	// may own them.
+	if len(cfg.Namespaces) > 0 && !slices.Contains(cfg.Namespaces, svc.Namespace) {
+		return ctrl.Result{}, nil
+	}
+
 	if !eligible(cfg, &svc) {
 		// A Service we used to own may have changed type or moved to
 		// another loadBalancerClass. Clear our leftover entries once;

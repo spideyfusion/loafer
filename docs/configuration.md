@@ -50,7 +50,7 @@ logLevel: info
 | `claimServicesWithoutClass` | `false` | Also claim Services with **no** `loadBalancerClass`. Only enable this if nothing else (cloud controller, MetalLB) could claim them — two implementations writing the same status will fight. |
 | `annotationPrefix` | `loafer.dev` | Prefix for the `<prefix>/ips` and `<prefix>/hostname` annotations. Lets forks rename without code changes. Must not contain `/`. |
 | `allowedCIDRs` | `[]` | When non-empty, every annotated IP must fall within at least one CIDR, otherwise the annotation is rejected (`Warning/InvalidAnnotation`). |
-| `namespaces` | `[]` | When non-empty, only Services in these namespaces are reconciled (and watched). Widening this list requires a restart (see hot-reload above). |
+| `namespaces` | `[]` | When non-empty, only Services in these namespaces are reconciled (and watched); Services elsewhere are never touched, not even leftover cleanup. Widening this list requires a restart (see hot-reload above). |
 | `ipAliases.configMapName` | `loafer-ip-aliases` | ConfigMap with `alias: IP` entries that Services reference via the `ip-names` annotation. Empty disables aliases. Requires a restart when changed. |
 | `ipAliases.namespace` | controller namespace | Namespace of that ConfigMap (resolved from `POD_NAMESPACE` or the serviceaccount mount when empty). Requires a restart when changed. |
 | `leaderElection.enabled` | `true` | Leader election for running multiple replicas. |

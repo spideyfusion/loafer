@@ -82,6 +82,9 @@ A Service is reconciled iff **all** hold (implemented in
    risky, documented).
 3. Namespace matches the configured selector (default: all). Namespaces are
    also filtered at the cache level in `cmd/loafer/main.go`.
+   **Out-of-scope namespaces are entirely hands-off** — not even leftover
+   cleanup happens there (another loafer instance may own them; instances
+   share the field manager name, so their watch scopes must be disjoint).
 4. Not being deleted. **No finalizer by design**: status dies with the
    object, so there is nothing to clean up on delete.
 

@@ -24,6 +24,13 @@ releases; this file tracks the highlights.
   namespace; the Deployment now injects `POD_NAMESPACE` via the downward
   API.
 
+### Changed
+
+- Namespaces outside the configured `namespaces` selector are now entirely
+  hands-off: loafer no longer clears leftover ingress entries there. This
+  makes it safe to run multiple loafer instances with disjoint namespace
+  scopes.
+
 ## [0.2.1] - 2026-07-14
 
 ### Fixed

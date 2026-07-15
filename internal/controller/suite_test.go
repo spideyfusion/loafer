@@ -14,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -57,13 +58,18 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "creating manager:", err)
 		os.Exit(1)
 	}
+	// Scope the suite reconciler to the default namespace so the second
+	// manager in reload_test.go (same field manager name!) can own its
+	// own namespace without the two fighting over leftover cleanup.
+	suiteCfg := config.Default()
+	suiteCfg.Namespaces = []string{"default"}
 	reconciler := &ServiceReconciler{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorder("loafer"),
-		Store:    config.NewStaticStore(config.Default()),
+		Store:    config.NewStaticStore(suiteCfg),
 		AliasesRef: types.NamespacedName{
 			Namespace: "default",
-			Name:      config.Default().IPAliases.ConfigMapName,
+			Name:      suiteCfg.IPAliases.ConfigMapName,
 		},
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
@@ -132,6 +138,11 @@ func eventuallyIngress(t *testing.T, name string, want []corev1.LoadBalancerIngr
 		func(ctx context.Context) (bool, error) {
 			var svc corev1.Service
 			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &svc); err != nil {
+				// The cache-backed client may briefly report a
+				// just-created object as missing; keep polling.
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
 				return false, err
 			}
 			last = svc.Status.LoadBalancer.Ingress
@@ -150,6 +161,11 @@ func consistentlyIngress(t *testing.T, name string, want []corev1.LoadBalancerIn
 	for time.Now().Before(deadline) {
 		var svc corev1.Service
 		if err := k8sClient.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: name}, &svc); err != nil {
+			// Tolerate cache lag on just-created objects.
+			if apierrors.IsNotFound(err) {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
 			t.Fatal(err)
 		}
 		if !ingressEqual(svc.Status.LoadBalancer.Ingress, want) {
